@@ -22,10 +22,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+import sys
 from pathlib import Path
 
 import click
 
+from forensicsim import __version__
 from forensicsim.consts import XTRACT_HEADER
 from forensicsim.parser import process_db
 
@@ -58,6 +60,10 @@ from forensicsim.parser import process_db
 )
 def process_cmd(filepath: Path, outputpath: Path, blobpath: Path) -> None:
     click.echo(XTRACT_HEADER)
+    print(f"[INFO] forensicsim version: {__version__}")
+    print(f"[INFO] Python: {sys.version}")
+    print(f"[INFO] parser.py location: {process_db.__module__}")
+    print(flush=True)
     process_db(filepath, outputpath, blobpath, filter_db_results=True)
 
 
