@@ -56,7 +56,7 @@ def decode_timestamp(content_utf8_encoded: str) -> datetime:
     if not content_str:
         return None
     try:
-        # Try Unix epoch milliseconds first (e.g., "1721365995912")
+        # Try Unix epoch milliseconds as int (e.g., "1721365995912")
         return datetime.utcfromtimestamp(int(content_str) / 1000)
     except (ValueError, OSError, OverflowError):
         pass
@@ -66,8 +66,12 @@ def decode_timestamp(content_utf8_encoded: str) -> datetime:
     except (ValueError, OSError):
         pass
     try:
-        # Try Unix epoch seconds as float (e.g., "1721365995.912")
-        return datetime.utcfromtimestamp(float(content_str))
+        # Try as float - could be seconds or milliseconds
+        float_val = float(content_str)
+        # If value > year 2100 in seconds (~4102444800), it's likely milliseconds
+        if float_val > 4102444800:
+            return datetime.utcfromtimestamp(float_val / 1000)
+        return datetime.utcfromtimestamp(float_val)
     except (ValueError, OSError, OverflowError):
         pass
     print(f"Warning: Could not parse timestamp: {content_str}")
