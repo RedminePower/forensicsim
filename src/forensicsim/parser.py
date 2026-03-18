@@ -43,10 +43,15 @@ def decode_dict(properties: Union[bytes, str, dict]) -> dict[str, Any]:
             return properties
     except JSONDecodeError as e:
         print(e)
-        print("Couldn't decode dictionary ", properties)
+        print(f"Couldn't decode dictionary. type={type(properties).__name__}, value={str(properties)[:300]}")
         return {}
 
-    return json.loads(properties, strict=False)
+    try:
+        return json.loads(properties, strict=False)
+    except JSONDecodeError as e:
+        print(e)
+        print(f"Couldn't decode dictionary (json.loads). type={type(properties).__name__}, value={str(properties)[:300]}")
+        return {}
 
 
 def decode_timestamp(content_utf8_encoded: str) -> datetime:
@@ -72,8 +77,8 @@ def decode_timestamp(content_utf8_encoded: str) -> datetime:
         if float_val > 4102444800:
             return datetime.utcfromtimestamp(float_val / 1000)
         return datetime.utcfromtimestamp(float_val)
-    except (ValueError, OSError, OverflowError):
-        pass
+    except (ValueError, OSError, OverflowError) as e:
+        print(f"[DIAG] Float timestamp failed: input_type={type(content_utf8_encoded).__name__}, content_str='{content_str}', error={e}")
     print(f"Warning: Could not parse timestamp: {content_str}")
     return None
 
@@ -318,15 +323,23 @@ def identify_teams_version(reply_chains: list[dict]) -> str:
     # Identify version based on reply chain structure
     fingerprint_teams_version = ""
     for rc in reply_chains:
-        rc |= rc.get("value", {})
-        if rc.get("value", {}).get("messages", {}):
+        rc_value = rc.get("value", {})
+        if rc_value.get("messages", {}):
             fingerprint_teams_version = "v1"
-        elif rc.get("value", {}).get("messageMap", {}):
+        elif rc_value.get("messageMap", {}):
             fingerprint_teams_version = "v2"
         else:
             fingerprint_teams_version = "unknown"
+            # Diagnostic: log keys to identify new data structure
+            print(f"[DIAG] Version detection failed. reply_chain value keys: {list(rc_value.keys()) if isinstance(rc_value, dict) else type(rc_value).__name__}")
+            if isinstance(rc_value, dict):
+                for k in list(rc_value.keys())[:20]:
+                    v = rc_value[k]
+                    print(f"[DIAG]   key='{k}', type={type(v).__name__}, value={str(v)[:200]}")
         break
 
+    print(f"[DIAG] Detected Teams version: {fingerprint_teams_version}")
+    print(f"[DIAG] Total reply_chains records: {len(reply_chains)}")
     return fingerprint_teams_version
 
 
