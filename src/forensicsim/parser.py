@@ -50,7 +50,27 @@ def decode_dict(properties: Union[bytes, str, dict]) -> dict[str, Any]:
 
 
 def decode_timestamp(content_utf8_encoded: str) -> datetime:
-    return datetime.utcfromtimestamp(int(content_utf8_encoded) / 1000)
+    if content_utf8_encoded is None:
+        return None
+    content_str = str(content_utf8_encoded).strip()
+    if not content_str:
+        return None
+    try:
+        # Try Unix epoch milliseconds first (e.g., "1721365995912")
+        return datetime.utcfromtimestamp(int(content_str) / 1000)
+    except ValueError:
+        pass
+    try:
+        # Try ISO 8601 format (e.g., "2024-07-19T04:53:15.912Z")
+        return datetime.fromisoformat(content_str.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    try:
+        # Try Unix epoch seconds as float (e.g., "1721365995.912")
+        return datetime.utcfromtimestamp(float(content_str))
+    except ValueError:
+        print(f"Warning: Could not parse timestamp: {content_str}")
+        return None
 
 
 def encode_timestamp(timestamp: Optional[datetime]) -> Optional[str]:
@@ -226,7 +246,10 @@ def _parse_conversations(conversations: list[dict], version: str) -> set[Meeting
         if version in ("v1", "v2") and "meeting" in thread_properties:
             c |= value
             c |= {"cached_deduplication_key": c.get("id")}
-            cleaned_conversations.add(Meeting.from_dict(c))
+            try:
+                cleaned_conversations.add(Meeting.from_dict(c))
+            except (ValueError, TypeError, KeyError) as e:
+                print(f"Warning: Skipping meeting due to parsing error: {e}")
         else:
             logging.warning(
                 "Teams Version is unknown. Can not extract records of type meeting."
@@ -277,7 +300,11 @@ def _parse_reply_chains(reply_chains: list[dict], version: str) -> set[Message]:
                     rc |= {"is_from_me": md.get("isSentByCurrentUser")}
                     rc |= {"messagetype": md.get("messageType")}
 
-                cleaned_reply_chains.add(Message.from_dict(rc))
+                try:
+                    cleaned_reply_chains.add(Message.from_dict(rc))
+                except (ValueError, TypeError, KeyError) as e:
+                    print(f"Warning: Skipping message due to parsing error: {e}")
+                    continue
 
     return cleaned_reply_chains
 

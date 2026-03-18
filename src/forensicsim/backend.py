@@ -63,24 +63,30 @@ def parse_db(
                 obj_store = db[obj_store_name]
                 records_per_object_store = 0
                 for record in obj_store.iterate_records(errors_to_stdout=True):
-                    # skip empty records
-                    if not hasattr(record, "value") or record.value is None:
+                    try:
+                        # skip empty records
+                        if not hasattr(record, "value") or record.value is None:
+                            continue
+                        # skip records without file origin
+                        if not hasattr(record, "origin_file") or record.origin_file is None:
+                            continue
+                        records_per_object_store += 1
+                        # TODO: Fix None values
+                        state = None
+                        seq = None
+                        extracted_values.append({
+                            "key": record.key.raw_key,
+                            "value": record.value,
+                            "origin_file": record.origin_file,
+                            "store": obj_store_name,
+                            "state": state,
+                            "seq": seq,
+                        })
+                    except (ValueError, Exception) as e:
+                        # Skip records that fail to deserialize (e.g., v8 header
+                        # errors in newer Teams versions)
+                        print(f"Warning: Skipping record due to error: {e}")
                         continue
-                    # skip records without file origin
-                    if not hasattr(record, "origin_file") or record.origin_file is None:
-                        continue
-                    records_per_object_store += 1
-                    # TODO: Fix None values
-                    state = None
-                    seq = None
-                    extracted_values.append({
-                        "key": record.key.raw_key,
-                        "value": record.value,
-                        "origin_file": record.origin_file,
-                        "store": obj_store_name,
-                        "state": state,
-                        "seq": seq,
-                    })
                 print(
                     f"{obj_store_name} {db.name} (Records: {records_per_object_store})"
                 )
