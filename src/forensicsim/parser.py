@@ -321,26 +321,31 @@ def _parse_reply_chains(reply_chains: list[dict], version: str) -> set[Message]:
 
 def identify_teams_version(reply_chains: list[dict]) -> str:
     # Identify version based on reply chain structure
-    fingerprint_teams_version = ""
-    for rc in reply_chains:
+    # Check multiple records since some may be empty
+    for i, rc in enumerate(reply_chains[:50]):
         rc_value = rc.get("value", {})
+        if not rc_value or not isinstance(rc_value, dict):
+            continue
         if rc_value.get("messages", {}):
-            fingerprint_teams_version = "v1"
-        elif rc_value.get("messageMap", {}):
-            fingerprint_teams_version = "v2"
-        else:
-            fingerprint_teams_version = "unknown"
-            # Diagnostic: log keys to identify new data structure
-            print(f"[DIAG] Version detection failed. reply_chain value keys: {list(rc_value.keys()) if isinstance(rc_value, dict) else type(rc_value).__name__}")
-            if isinstance(rc_value, dict):
-                for k in list(rc_value.keys())[:20]:
-                    v = rc_value[k]
-                    print(f"[DIAG]   key='{k}', type={type(v).__name__}, value={str(v)[:200]}")
-        break
+            print(f"[DIAG] Detected Teams version: v1 (from record {i})")
+            return "v1"
+        if rc_value.get("messageMap", {}):
+            print(f"[DIAG] Detected Teams version: v2 (from record {i})")
+            return "v2"
 
-    print(f"[DIAG] Detected Teams version: {fingerprint_teams_version}")
+    # Log diagnostic info for the first non-empty record
+    for i, rc in enumerate(reply_chains[:5]):
+        rc_value = rc.get("value", {})
+        if rc_value and isinstance(rc_value, dict):
+            print(f"[DIAG] Version detection failed. Record {i} value keys: {list(rc_value.keys())[:30]}")
+            for k in list(rc_value.keys())[:20]:
+                v = rc_value[k]
+                print(f"[DIAG]   key='{k}', type={type(v).__name__}, value={str(v)[:300]}")
+            break
+
     print(f"[DIAG] Total reply_chains records: {len(reply_chains)}")
-    return fingerprint_teams_version
+    print(f"[DIAG] Detected Teams version: unknown")
+    return "unknown"
 
 
 def parse_records(records: list[dict]) -> list[dict]:
