@@ -58,19 +58,20 @@ def decode_timestamp(content_utf8_encoded: str) -> datetime:
     try:
         # Try Unix epoch milliseconds first (e.g., "1721365995912")
         return datetime.utcfromtimestamp(int(content_str) / 1000)
-    except ValueError:
+    except (ValueError, OSError, OverflowError):
         pass
     try:
         # Try ISO 8601 format (e.g., "2024-07-19T04:53:15.912Z")
         return datetime.fromisoformat(content_str.replace("Z", "+00:00"))
-    except ValueError:
+    except (ValueError, OSError):
         pass
     try:
         # Try Unix epoch seconds as float (e.g., "1721365995.912")
         return datetime.utcfromtimestamp(float(content_str))
-    except ValueError:
-        print(f"Warning: Could not parse timestamp: {content_str}")
-        return None
+    except (ValueError, OSError, OverflowError):
+        pass
+    print(f"Warning: Could not parse timestamp: {content_str}")
+    return None
 
 
 def encode_timestamp(timestamp: Optional[datetime]) -> Optional[str]:
@@ -248,7 +249,7 @@ def _parse_conversations(conversations: list[dict], version: str) -> set[Meeting
             c |= {"cached_deduplication_key": c.get("id")}
             try:
                 cleaned_conversations.add(Meeting.from_dict(c))
-            except (ValueError, TypeError, KeyError) as e:
+            except (ValueError, TypeError, KeyError, OSError, OverflowError) as e:
                 print(f"Warning: Skipping meeting due to parsing error: {e}")
         else:
             logging.warning(
@@ -302,7 +303,7 @@ def _parse_reply_chains(reply_chains: list[dict], version: str) -> set[Message]:
 
                 try:
                     cleaned_reply_chains.add(Message.from_dict(rc))
-                except (ValueError, TypeError, KeyError) as e:
+                except (ValueError, TypeError, KeyError, OSError, OverflowError) as e:
                     print(f"Warning: Skipping message due to parsing error: {e}")
                     continue
 
