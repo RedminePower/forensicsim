@@ -51,11 +51,19 @@ if "%LEVELDB_PATH%"=="" (
     exit /b 1
 )
 
+REM .leveldb と同階層の .blob フォルダを検出（TeamsService.cs と同じロジック）
+set "BLOB_PATH=%LEVELDB_PATH:.leveldb=.blob%"
+set BLOB_ARG=
+if exist "%BLOB_PATH%" (
+    set "BLOB_ARG=-b "%BLOB_PATH%""
+    echo   blob: %BLOB_PATH%
+)
+
 echo   DB: %LEVELDB_PATH%
 echo   出力: %OUTPUT_JSON%
 echo.
 
-"%PARSER_EXE%" -f "%LEVELDB_PATH%" -o "%OUTPUT_JSON%"
+"%PARSER_EXE%" -f "%LEVELDB_PATH%" -o "%OUTPUT_JSON%" %BLOB_ARG%
 if errorlevel 1 (
     echo [ERROR] ms_teams_parser.exe の実行に失敗しました
     pause
