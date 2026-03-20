@@ -78,7 +78,7 @@ def decode_timestamp(content_utf8_encoded: str) -> datetime:
             return datetime.utcfromtimestamp(float_val / 1000)
         return datetime.utcfromtimestamp(float_val)
     except (ValueError, OSError, OverflowError) as e:
-        print(f"[DIAG] Float timestamp failed: input_type={type(content_utf8_encoded).__name__}, content_str='{content_str}', error={e}")
+        pass
     print(f"Warning: Could not parse timestamp: {content_str}")
     return None
 
@@ -213,27 +213,17 @@ class Contact(DataClassJsonMixin):
 
 def _parse_people(people: list[dict], version: str) -> set[Contact]:
     parsed_people = set()
-    diag_printed = 0
 
     for p in people:
-        # 診断: レコードのトップレベル構造を確認（最初の3件）
-        if diag_printed < 3:
-            diag_printed += 1
-            print(f"[DIAG] people record top-level keys: {list(p.keys())[:20]}")
-            for k in list(p.keys())[:15]:
-                v = p[k]
-                v_str = str(v)[:300] if v is not None else "None"
-                print(f"[DIAG]   {k} = {v_str}")
-
         p_value = p.get("value")
 
         # v2 では "value" キーがない場合、レコード自体にデータが格納されている
         if p_value is None and version in ("v1", "v2"):
-            # "value" がない場合、p 自体を p_value として扱う
             p_value = p
 
         if p_value is not None and isinstance(p_value, dict) and version in ("v1", "v2"):
-            # email の取得: v2 では EmailAddresses (リスト、大文字始まり) に格納
+            # v1: mri キーが直接存在する
+            # v2: mri がなく、id や EmailAddresses を使用する
             email = (
                 p_value.get("email")
                 or p_value.get("emailAddress")
@@ -241,7 +231,6 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
                 or p_value.get("sipAddress")
             )
             if not email:
-                # v2: EmailAddresses (大文字E) または emailAddresses (小文字e)
                 email_addresses = (
                     p_value.get("EmailAddresses")
                     or p_value.get("emailAddresses")
@@ -250,7 +239,6 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
                 if isinstance(email_addresses, list) and email_addresses:
                     email = email_addresses[0]
 
-            # mri の取得: v2 では mri がない場合、id または email を代用
             mri = (
                 p_value.get("mri")
                 or p_value.get("objectId")
@@ -259,7 +247,6 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
                 or email
             )
 
-            # displayName の取得: v2 では DisplayName (大文字D)
             display_name = (
                 p_value.get("displayName")
                 or p_value.get("DisplayName")
@@ -271,7 +258,6 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
                 display_name = f"{given} {surname}".strip() or None
 
             if mri is not None:
-                # Contact.from_dict 用に正しいキー名で dict を構築
                 contact_dict = {
                     "mri": mri,
                     "email": email,
@@ -279,8 +265,6 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
                     "userPrincipalName": p_value.get("userPrincipalName"),
                     "origin_file": p.get("origin_file"),
                 }
-                if diag_printed <= 3:
-                    print(f"[DIAG] contact_dict: mri={mri}, email={email}, displayName={display_name}")
                 try:
                     parsed_people.add(Contact.from_dict(contact_dict))
                 except Exception as e:
@@ -290,7 +274,6 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
                 "Teams Version is unknown or record incomplete. Can not extract records of type people."
             )
 
-    print(f"[DIAG] people: {len(people)} raw records -> {len(parsed_people)} contacts parsed")
     return parsed_people
 
 
@@ -391,24 +374,10 @@ def identify_teams_version(reply_chains: list[dict]) -> str:
         if not rc_value or not isinstance(rc_value, dict):
             continue
         if rc_value.get("messages", {}):
-            print(f"[DIAG] Detected Teams version: v1 (from record {i})")
             return "v1"
         if rc_value.get("messageMap", {}):
-            print(f"[DIAG] Detected Teams version: v2 (from record {i})")
             return "v2"
 
-    # Log diagnostic info for the first non-empty record
-    for i, rc in enumerate(reply_chains[:5]):
-        rc_value = rc.get("value", {})
-        if rc_value and isinstance(rc_value, dict):
-            print(f"[DIAG] Version detection failed. Record {i} value keys: {list(rc_value.keys())[:30]}")
-            for k in list(rc_value.keys())[:20]:
-                v = rc_value[k]
-                print(f"[DIAG]   key='{k}', type={type(v).__name__}, value={str(v)[:300]}")
-            break
-
-    print(f"[DIAG] Total reply_chains records: {len(reply_chains)}")
-    print(f"[DIAG] Detected Teams version: unknown")
     return "unknown"
 
 
