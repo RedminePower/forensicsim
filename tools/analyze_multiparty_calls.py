@@ -16,6 +16,12 @@ import json
 import sys
 
 
+def get_call_log(call):
+    """call-log または callLog キーから callLog を取得する"""
+    props = call.get("properties", {})
+    return props.get("call-log", props.get("callLog", {})) or {}
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python analyze_multiparty_calls.py <teams_output.json>")
@@ -31,11 +37,54 @@ def main():
 
     print(f"=== Summary: {len(contacts)} contacts, {len(calls)} calls, {len(meetings)} meetings ===\n")
 
-    # --- multiParty calls ---
-    mp_calls = [c for c in calls
-                if c.get("properties", {}).get("callLog", {}).get("callType") == "multiParty"]
+    # --- call レコードの概要 ---
+    print("--- call レコードの概要（最初の3件）---\n")
+    for i, c in enumerate(calls[:3]):
+        cl = get_call_log(c)
+        print(f"call {i+1}:")
+        print(f"  callLog keys: {list(cl.keys())[:20]}")
+        print(f"  callState:     {cl.get('callState')}")
+        print(f"  callType:      {cl.get('callType')}")
+        print(f"  callDirection: {cl.get('callDirection')}")
+        print(f"  startTime:     {cl.get('startTime')}")
+        print(f"  endTime:       {cl.get('endTime')}")
+        plist = cl.get("participantList", [])
+        participants = cl.get("participants", [])
+        print(f"  participantList: {len(plist) if plist else 'None'}")
+        print(f"  participants:    {len(participants) if participants else 'None'}")
+        print()
 
+    # --- callType 集計 ---
+    call_types = {}
+    for c in calls:
+        cl = get_call_log(c)
+        ct = cl.get("callType", "N/A")
+        call_types[ct] = call_types.get(ct, 0) + 1
+    print(f"--- callType 集計 ---")
+    for ct, count in sorted(call_types.items(), key=lambda x: -x[1]):
+        print(f"  {ct}: {count} 件")
+    print()
+
+    # --- callState 集計 ---
+    call_states = {}
+    for c in calls:
+        cl = get_call_log(c)
+        cs = cl.get("callState", "N/A")
+        call_states[cs] = call_states.get(cs, 0) + 1
+    print(f"--- callState 集計 ---")
+    for cs, count in sorted(call_states.items(), key=lambda x: -x[1]):
+        print(f"  {cs}: {count} 件")
+    print()
+
+    # --- multiParty calls ---
+    mp_calls = [c for c in calls if get_call_log(c).get("callType") == "multiParty"]
     print(f"--- multiParty calls: {len(mp_calls)} 件 ---\n")
+
+    # --- participantList を持つ call ---
+    has_plist = [c for c in calls if get_call_log(c).get("participantList")]
+    has_participants = [c for c in calls if get_call_log(c).get("participants")]
+    print(f"--- participantList を持つ call: {len(has_plist)} 件 ---")
+    print(f"--- participants を持つ call: {len(has_participants)} 件 ---\n")
 
     def find_contact(pid):
         if not pid:
@@ -49,25 +98,27 @@ def main():
                 return v
         return None
 
-    for i, c in enumerate(mp_calls[:10]):
-        cl = c["properties"]["callLog"]
+    # participantList がある call の詳細
+    for i, c in enumerate((mp_calls or has_plist or has_participants)[:10]):
+        cl = get_call_log(c)
         print(f"--- call {i+1} ---")
         print(f"  startTime:     {cl.get('startTime')}")
         print(f"  endTime:       {cl.get('endTime')}")
         print(f"  callState:     {cl.get('callState')}")
+        print(f"  callType:      {cl.get('callType')}")
         print(f"  callDirection: {cl.get('callDirection')}")
-        print(f"  threadId:      {cl.get('threadId', 'N/A')}")
 
         plist = cl.get("participantList", [])
         participants = cl.get("participants", [])
 
-        print(f"  participantList ({len(plist)}):")
-        for p in plist:
-            pid = p.get("id", p) if isinstance(p, dict) else p
-            ct = find_contact(pid)
-            name = ct.get("displayName", "?") if ct else "?"
-            email = ct.get("email", "no email") if ct else "no email"
-            print(f"    {pid} -> {name} ({email})")
+        if plist:
+            print(f"  participantList ({len(plist)}):")
+            for p in plist:
+                pid = p.get("id", p) if isinstance(p, dict) else p
+                ct = find_contact(pid)
+                name = ct.get("displayName", "?") if ct else "?"
+                email = ct.get("email", "no email") if ct else "no email"
+                print(f"    {pid} -> {name} ({email})")
 
         if participants:
             print(f"  participants ({len(participants)}):")
@@ -79,41 +130,25 @@ def main():
 
         print()
 
-    # --- meetings との比較 ---
-    if mp_calls and meetings:
-        print("--- 同時間帯の meeting との比較 ---\n")
-        for i, c in enumerate(mp_calls[:5]):
-            cl = c["properties"]["callLog"]
-            call_start = cl.get("startTime", "")
-            call_thread = cl.get("threadId", "")
-
-            matching_meetings = []
-            for m in meetings:
-                tp = m.get("threadProperties", {}).get("meeting", {})
-                # threadId で照合
-                if call_thread and call_thread == m.get("id"):
-                    matching_meetings.append(m)
-
-            if matching_meetings:
-                print(f"  call {i+1} ({call_start}) に対応する meeting:")
-                for m in matching_meetings:
-                    tp = m.get("threadProperties", {}).get("meeting", {})
-                    members = m.get("members", [])
-                    plist = cl.get("participantList", [])
-                    print(f"    subject: {tp.get('subject', 'N/A')}")
-                    print(f"    meeting members: {len(members)} 人, call participantList: {len(plist)} 人")
-                    print(f"    → 差分があれば meeting=招待者全員, call=実参加者 の可能性が高い")
-                print()
-
-    if not mp_calls:
-        print("multiParty call が 0 件です。")
-        print("通常の call レコードの callType 一覧:")
-        call_types = {}
-        for c in calls:
-            ct = c.get("properties", {}).get("callLog", {}).get("callType", "N/A")
-            call_types[ct] = call_types.get(ct, 0) + 1
-        for ct, count in sorted(call_types.items(), key=lambda x: -x[1]):
-            print(f"  {ct}: {count} 件")
+    # --- meetings の members 情報 ---
+    print(f"--- meetings の概要（最初の5件）---\n")
+    for i, m in enumerate(meetings[:5]):
+        tp = m.get("threadProperties", {}).get("meeting", {})
+        members = m.get("members", [])
+        print(f"meeting {i+1}:")
+        print(f"  subject:   {tp.get('subject', 'N/A')}")
+        print(f"  startTime: {tp.get('startTime')}")
+        print(f"  endTime:   {tp.get('endTime')}")
+        print(f"  members ({len(members)}):")
+        for mem in members[:10]:
+            mid = mem.get("id", str(mem))
+            ct = find_contact(mid)
+            name = ct.get("displayName", "?") if ct else "?"
+            email = ct.get("email", "no email") if ct else "no email"
+            print(f"    {mid} -> {name} ({email})")
+        if len(members) > 10:
+            print(f"    ... 他 {len(members) - 10} 人")
+        print()
 
 
 if __name__ == "__main__":
