@@ -77,14 +77,14 @@ echo.
 python "%~dp0teams_data_validator.py" "%OUTPUT_JSON%"
 
 echo.
-echo === Step 3: 詳細分析 ===
+echo === Step 3: call レコード詳細分析 ===
 echo.
 
-python "%~dp0teams_deep_analysis.py" "%OUTPUT_JSON%"
+python "%~dp0teams_call_analysis.py" "%OUTPUT_JSON%"
 
 echo.
 echo === 完了 ===
 echo 結果を確認してください。
 echo 出力が長い場合は以下でファイルに保存できます:
-echo   python "%~dp0teams_deep_analysis.py" "%OUTPUT_JSON%" ^> C:\tmp\analysis_result.txt
+echo   python "%~dp0teams_call_analysis.py" "%OUTPUT_JSON%" ^> C:\tmp\call_analysis_result.txt
 pause

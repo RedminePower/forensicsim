@@ -18,6 +18,18 @@ import io
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
+def get_call_log(record):
+    """call-log キーを取得する（パーサー出力は 'call-log'、TeamsService.cs は 'callLog'）"""
+    props = record.get("properties", {})
+    cl = props.get("call-log") or props.get("callLog") or {}
+    if isinstance(cl, str):
+        try:
+            cl = json.loads(cl)
+        except:
+            cl = {}
+    return cl if isinstance(cl, dict) else {}
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python teams_data_validator.py <teams_output.json>")
@@ -40,15 +52,15 @@ def main():
     print(f"  meetings: {len(meetings)}")
 
     # multiParty calls (= group meetings)
-    mp_calls = [c for c in calls if c.get("properties", {}).get("callLog", {}).get("callType") == "multiParty"]
-    tp_calls = [c for c in calls if c.get("properties", {}).get("callLog", {}).get("callType") == "twoParty"]
+    mp_calls = [c for c in calls if get_call_log(c).get("callType") == "multiParty"]
+    tp_calls = [c for c in calls if get_call_log(c).get("callType") == "twoParty"]
     print(f"\n--- Call breakdown ---")
     print(f"  multiParty: {len(mp_calls)}")
     print(f"  twoParty:   {len(tp_calls)}")
 
     print(f"\n--- multiParty calls (top 10) ---")
     for c in mp_calls[:10]:
-        cl = c["properties"]["callLog"]
+        cl = get_call_log(c)
         print(f"\n  startTime: {cl.get('startTime')}")
         print(f"  endTime:   {cl.get('endTime')}")
         print(f"  callState: {cl.get('callState')}")
@@ -79,7 +91,7 @@ def main():
 
     print(f"\n--- twoParty calls (top 5) ---")
     for c in tp_calls[:5]:
-        cl = c["properties"]["callLog"]
+        cl = get_call_log(c)
         print(f"\n  startTime:  {cl.get('startTime')}")
         print(f"  callState:  {cl.get('callState')}")
         orig = cl.get("originatorParticipant", {})
@@ -112,7 +124,7 @@ def main():
     print(f"\n--- meeting/call マッチング分析 ---")
     call_threads = {}
     for c in mp_calls:
-        cl = c["properties"]["callLog"]
+        cl = get_call_log(c)
         tid = cl.get("threadId")
         if tid:
             call_threads.setdefault(tid, []).append(cl)
@@ -160,8 +172,8 @@ def main():
     print(f"\n=== 結論 ===")
     if mp_calls:
         has_participant_data = any(
-            (c["properties"]["callLog"].get("participantList") is not None and c["properties"]["callLog"]["participantList"] is not None)
-            or (c["properties"]["callLog"].get("participants") is not None and c["properties"]["callLog"]["participants"] is not None)
+            (get_call_log(c).get("participantList") is not None and get_call_log(c)["participantList"] is not None)
+            or (get_call_log(c).get("participants") is not None and get_call_log(c)["participants"] is not None)
             for c in mp_calls
         )
         if has_participant_data:
