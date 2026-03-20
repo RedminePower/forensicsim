@@ -232,44 +232,59 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
             # "value" がない場合、p 自体を p_value として扱う
             p_value = p
 
-        if p_value is not None and version in ("v1", "v2"):
-            # email の取得: v2 では emailAddresses (リスト) に格納されている
+        if p_value is not None and isinstance(p_value, dict) and version in ("v1", "v2"):
+            # email の取得: v2 では EmailAddresses (リスト、大文字始まり) に格納
             email = (
                 p_value.get("email")
                 or p_value.get("emailAddress")
                 or p_value.get("userPrincipalName")
                 or p_value.get("sipAddress")
             )
-            # emailAddresses はリスト形式
             if not email:
-                email_addresses = p_value.get("emailAddresses", [])
+                # v2: EmailAddresses (大文字E) または emailAddresses (小文字e)
+                email_addresses = (
+                    p_value.get("EmailAddresses")
+                    or p_value.get("emailAddresses")
+                    or []
+                )
                 if isinstance(email_addresses, list) and email_addresses:
                     email = email_addresses[0]
 
-            # mri の取得: v2 では mri がない場合、emailAddresses[0] を代用
+            # mri の取得: v2 では mri がない場合、id または email を代用
             mri = (
                 p_value.get("mri")
                 or p_value.get("objectId")
                 or p_value.get("id")
                 or p_value.get("userId")
-                or email  # email を mri の代わりに使用
+                or email
             )
+
+            # displayName の取得: v2 では DisplayName (大文字D)
+            display_name = (
+                p_value.get("displayName")
+                or p_value.get("DisplayName")
+                or p_value.get("display_name")
+            )
+            if not display_name:
+                given = p_value.get("givenName") or p_value.get("GivenName") or ""
+                surname = p_value.get("surname") or p_value.get("Surname") or ""
+                display_name = f"{given} {surname}".strip() or None
+
             if mri is not None:
-                merged = p | p_value if p_value is not p else dict(p)
-                merged["mri"] = mri
-                if not merged.get("email"):
-                    merged["email"] = email
-                if not merged.get("displayName") and not merged.get("display_name"):
-                    merged["displayName"] = (
-                        p_value.get("displayName")
-                        or p_value.get("display_name")
-                        or (p_value.get("givenName", p_value.get("GivenName", "")) + " " + p_value.get("surname", p_value.get("Surname", ""))).strip()
-                        or None
-                    )
+                # Contact.from_dict 用に正しいキー名で dict を構築
+                contact_dict = {
+                    "mri": mri,
+                    "email": email,
+                    "displayName": display_name,
+                    "userPrincipalName": p_value.get("userPrincipalName"),
+                    "origin_file": p.get("origin_file"),
+                }
+                if diag_printed <= 3:
+                    print(f"[DIAG] contact_dict: mri={mri}, email={email}, displayName={display_name}")
                 try:
-                    parsed_people.add(Contact.from_dict(merged))
-                except (ValueError, TypeError, KeyError) as e:
-                    print(f"Warning: Skipping people record: {e}")
+                    parsed_people.add(Contact.from_dict(contact_dict))
+                except Exception as e:
+                    print(f"Warning: Skipping people record: {type(e).__name__}: {e}")
         else:
             logging.warning(
                 "Teams Version is unknown or record incomplete. Can not extract records of type people."
