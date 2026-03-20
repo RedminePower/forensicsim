@@ -213,20 +213,53 @@ class Contact(DataClassJsonMixin):
 
 def _parse_people(people: list[dict], version: str) -> set[Contact]:
     parsed_people = set()
+    diag_printed = 0
 
     for p in people:
         # Skip empty records / records w/o mri
         p_value = p.get("value")
-        if (
-            p_value is not None
-            and p_value.get("mri") is not None
-            and version in ("v1", "v2")
-        ):
-            parsed_people.add(Contact.from_dict(p | p.get("value", {})))
+        if p_value is not None and version in ("v1", "v2"):
+            # v2 では mri が value 直下ではなく別の場所にある場合がある
+            mri = p_value.get("mri")
+            if mri is None:
+                # 診断: value のキーを出力して構造を確認
+                if diag_printed < 3:
+                    diag_printed += 1
+                    print(f"[DIAG] people record without mri. value keys: {list(p_value.keys())[:20]}")
+                    for k in list(p_value.keys())[:10]:
+                        v = p_value[k]
+                        v_str = str(v)[:200] if v is not None else "None"
+                        print(f"[DIAG]   {k} = {v_str}")
+                # v2 で mri が別のキーにある場合を試す
+                mri = p_value.get("objectId") or p_value.get("id") or p_value.get("userId")
+                if mri is not None:
+                    p_value["mri"] = mri
+            if mri is not None:
+                merged = p | p_value
+                # email の取得を試みる (v2 では別のキーにある場合がある)
+                if not merged.get("email"):
+                    merged["email"] = (
+                        p_value.get("email")
+                        or p_value.get("emailAddress")
+                        or p_value.get("userPrincipalName")
+                        or p_value.get("sipAddress")
+                    )
+                if not merged.get("displayName") and not merged.get("display_name"):
+                    merged["displayName"] = (
+                        p_value.get("displayName")
+                        or p_value.get("display_name")
+                        or p_value.get("givenName", "") + " " + p_value.get("surname", "")
+                    ).strip() or None
+                try:
+                    parsed_people.add(Contact.from_dict(merged))
+                except (ValueError, TypeError, KeyError) as e:
+                    print(f"Warning: Skipping people record: {e}")
         else:
             logging.warning(
                 "Teams Version is unknown or record incomplete. Can not extract records of type people."
             )
+
+    print(f"[DIAG] people: {len(people)} raw records -> {len(parsed_people)} contacts parsed")
     return parsed_people
 
 

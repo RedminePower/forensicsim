@@ -1,1 +1,1 @@
-__version__ = "0.9.0-diag"
+__version__ = "0.9.0.dev1"
