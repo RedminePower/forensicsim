@@ -229,55 +229,110 @@ def analyze(calls: list[dict], meetings: list[dict]) -> None:
             print(f"      meeting:  {mid}")
             print()
 
-        # UUID 抽出による一致の試行
+        # --- threadId hex UUID vs meeting.id Base64 UUID の紐付け ---
         import re
-        uuid_pattern = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
+        import base64
 
-        tid_uuids = {}  # uuid -> threadId
+        # threadId から hex UUID を抽出 (19:<32hex>@thread.v2 → UUID)
+        hex32_pattern = re.compile(r'19:([0-9a-f]{32})@', re.IGNORECASE)
+        tid_to_uuid = {}  # normalized uuid -> call dict
         for c in multi_party:
             tid = c["call_log"].get("threadId", "")
             if not tid or tid in (None, "None", ""):
                 continue
-            for m in uuid_pattern.findall(tid):
-                tid_uuids[m.lower()] = tid
+            m = hex32_pattern.search(tid)
+            if m:
+                hex_str = m.group(1).lower()
+                # 32hex → UUID 形式に変換
+                uuid_str = f"{hex_str[:8]}-{hex_str[8:12]}-{hex_str[12:16]}-{hex_str[16:20]}-{hex_str[20:]}"
+                tid_to_uuid[uuid_str] = c
 
-        mid_uuids = {}  # uuid -> meeting.id
-        for mid in meeting_by_id:
-            for m in uuid_pattern.findall(mid):
-                mid_uuids[m.lower()] = mid
-
-        uuid_matches = set(tid_uuids.keys()) & set(mid_uuids.keys())
-        print(f"    UUID 抽出による一致: {len(uuid_matches)} 件")
-        print(f"    threadId 内の UUID 数: {len(tid_uuids)}")
-        print(f"    meeting.id 内の UUID 数: {len(mid_uuids)}")
-        for uuid_val in list(uuid_matches)[:3]:
-            print(f"      UUID:     {uuid_val}")
-            print(f"      threadId: {tid_uuids[uuid_val]}")
-            print(f"      meeting:  {mid_uuids[uuid_val]}")
-            print()
-
-        # Base64 デコードの試行（meeting.id の meeting_XXXX 部分）
-        import base64
-        mid_decoded = {}  # decoded -> meeting.id
-        for mid in meeting_by_id:
+        # meeting.id から Base64 デコードして UUID を抽出
+        uuid_pattern = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
+        mid_to_uuid = {}  # normalized uuid -> meeting dict
+        mid_decoded_samples = {}  # meeting.id -> decoded string (サンプル表示用)
+        for mid, mtg in meeting_by_id.items():
             b64_match = re.search(r'meeting_([A-Za-z0-9+/=_-]+)@', mid)
             if b64_match:
                 b64_str = b64_match.group(1)
-                # URL-safe base64 → standard base64
                 b64_str_std = b64_str.replace('-', '+').replace('_', '/')
-                # パディング補完
                 b64_str_std += '=' * (4 - len(b64_str_std) % 4) if len(b64_str_std) % 4 else ''
                 try:
                     decoded = base64.b64decode(b64_str_std).decode('utf-8', errors='replace')
-                    mid_decoded[mid] = decoded
+                    if len(mid_decoded_samples) < 5:
+                        mid_decoded_samples[mid] = decoded
+                    for uuid_m in uuid_pattern.findall(decoded):
+                        mid_to_uuid[uuid_m.lower()] = mtg
                 except Exception:
                     pass
 
-        if mid_decoded:
-            print(f"    meeting.id の Base64 デコード（最大5件）:")
-            for mid, decoded in list(mid_decoded.items())[:5]:
-                print(f"      {mid[:60]}...")
-                print(f"      -> decoded: {decoded}")
+        # UUID 同士で紐付け
+        tid_uuid_set = set(tid_to_uuid.keys())
+        mid_uuid_set = set(mid_to_uuid.keys())
+        uuid_matches = tid_uuid_set & mid_uuid_set
+
+        print(f"\n  ■ hex UUID vs Base64 UUID 紐付け:")
+        print(f"    threadId -> UUID 変換数: {len(tid_to_uuid)}")
+        print(f"    meeting.id -> UUID 抽出数: {len(mid_to_uuid)}")
+        print(f"    UUID 一致数: {len(uuid_matches)}")
+
+        if uuid_matches:
+            print(f"\n    紐付け成功ペア（最大5件）:")
+            for i, uuid_val in enumerate(list(uuid_matches)[:5]):
+                call = tid_to_uuid[uuid_val]
+                mtg = mid_to_uuid[uuid_val]
+                cl = call["call_log"]
+                tp = mtg.get("threadProperties", {})
+                mtg_info = tp.get("meeting", {}) if isinstance(tp, dict) else {}
+                subject = mtg_info.get("subject", tp.get("topic", "N/A"))
+                print(f"\n    [{i+1}] {subject}")
+                print(f"        UUID:          {uuid_val}")
+                print(f"        call.threadId: {cl.get('threadId', '')}")
+                print(f"        meeting.id:    {mtg.get('id', '')[:70]}...")
+                print(f"        call.time:     {cl.get('startTime', 'N/A')}")
+
+                # members vs participantList 差分もここで出す
+                members = mtg.get("members", []) or []
+                member_ids = set()
+                for mem in members:
+                    mem_id = mem.get("id", "") if isinstance(mem, dict) else str(mem)
+                    if mem_id:
+                        member_ids.add(mem_id)
+
+                pl = cl.get("participantList", []) or []
+                participant_ids = set()
+                for p in pl:
+                    if isinstance(p, dict):
+                        pid = p.get("id", p.get("mri", ""))
+                    elif isinstance(p, str):
+                        pid = p
+                    else:
+                        continue
+                    if pid:
+                        participant_ids.add(pid)
+
+                only_invited = member_ids - participant_ids
+                only_actual = participant_ids - member_ids
+                print(f"        招待者: {len(member_ids)}, 実参加者: {len(participant_ids)}")
+                print(f"        招待のみ: {len(only_invited)}, 参加のみ: {len(only_actual)}")
+
+            # 全体統計
+            print(f"\n    全体マッチ率: {len(uuid_matches)}/{len(tid_to_uuid)} "
+                  f"({len(uuid_matches)/len(tid_to_uuid)*100:.1f}%)" if tid_to_uuid else "")
+
+        if not uuid_matches and tid_to_uuid:
+            # UUID が一致しない場合、サンプルを表示してデバッグ
+            print(f"\n    UUID 不一致。サンプル比較:")
+            for uuid_val in list(tid_to_uuid.keys())[:3]:
+                print(f"      threadId UUID: {uuid_val}")
+            for uuid_val in list(mid_to_uuid.keys())[:3]:
+                print(f"      meeting  UUID: {uuid_val}")
+
+        if mid_decoded_samples:
+            print(f"\n    meeting.id Base64 デコード（最大5件）:")
+            for mid, decoded in mid_decoded_samples.items():
+                print(f"      {mid[:65]}...")
+                print(f"      -> {decoded}")
 
     if matched_pairs:
         print(f"\n  紐付けペア一覧:")
@@ -294,10 +349,23 @@ def analyze(calls: list[dict], meetings: list[dict]) -> None:
     # --- 確認ポイント 3: members vs participantList 差分 ---
     print(f"\n■ 確認ポイント 3: members（招待者）vs participantList（実参加者）差分")
 
-    if not matched_pairs:
+    # 直接一致 + UUID 一致の両方のペアを使う
+    all_pairs = list(matched_pairs)  # 直接一致ペア
+    uuid_match_count = 0
+    if 'uuid_matches' in dir() or True:
+        try:
+            for uuid_val in uuid_matches:
+                call = tid_to_uuid[uuid_val]
+                mtg = mid_to_uuid[uuid_val]
+                all_pairs.append((call, mtg))
+                uuid_match_count += 1
+        except NameError:
+            pass
+
+    if not all_pairs:
         print("  紐付けペアがないため差分比較不可")
     else:
-        for i, (call, meeting) in enumerate(matched_pairs):
+        for i, (call, meeting) in enumerate(all_pairs[:10]):  # 最大10件
             cl = call["call_log"]
             tp = meeting.get("threadProperties", {})
             mtg_info = tp.get("meeting", {}) if isinstance(tp, dict) else {}
@@ -307,9 +375,9 @@ def analyze(calls: list[dict], meetings: list[dict]) -> None:
             members = meeting.get("members", []) or []
             member_ids = set()
             for m in members:
-                mid = m.get("id", "") if isinstance(m, dict) else str(m)
-                if mid:
-                    member_ids.add(mid)
+                mem_id = m.get("id", "") if isinstance(m, dict) else str(m)
+                if mem_id:
+                    member_ids.add(mem_id)
 
             # call participantList（実参加者）
             pl = cl.get("participantList", []) or []
@@ -341,11 +409,13 @@ def analyze(calls: list[dict], meetings: list[dict]) -> None:
                 print(f"      招待外参加者: {list(only_actual)[:5]}{'...' if len(only_actual) > 5 else ''}")
 
     # --- 結論 ---
+    total_matched = len(matched_pairs) + uuid_match_count
     print(f"\n{'=' * 70}")
     print("■ 結論")
-    if thread_id_present > 0 and len(matched_pairs) > 0:
-        match_rate = len(matched_pairs) / thread_id_present * 100
-        print(f"  → 紐付け可能（マッチ率: {match_rate:.0f}%）")
+    if total_matched > 0:
+        match_rate = total_matched / thread_id_present * 100 if thread_id_present > 0 else 0
+        match_type = "UUID変換" if uuid_match_count > 0 and len(matched_pairs) == 0 else "直接一致"
+        print(f"  → 紐付け可能（{match_type}、マッチ: {total_matched}/{thread_id_present}、率: {match_rate:.1f}%）")
         print(f"  → TeamsMeeting でも実参加者を特定可能")
         print(f"  → call + meeting 両方を自動共有対象にできる")
     elif thread_id_present > 0:
