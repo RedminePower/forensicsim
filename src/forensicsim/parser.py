@@ -216,27 +216,33 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
     diag_printed = 0
 
     for p in people:
-        # Skip empty records / records w/o mri
+        # 診断: レコードのトップレベル構造を確認（最初の3件）
+        if diag_printed < 3:
+            diag_printed += 1
+            print(f"[DIAG] people record top-level keys: {list(p.keys())[:20]}")
+            for k in list(p.keys())[:15]:
+                v = p[k]
+                v_str = str(v)[:300] if v is not None else "None"
+                print(f"[DIAG]   {k} = {v_str}")
+
         p_value = p.get("value")
+
+        # v2 では "value" キーがない場合、レコード自体にデータが格納されている
+        if p_value is None and version in ("v1", "v2"):
+            # "value" がない場合、p 自体を p_value として扱う
+            p_value = p
+
         if p_value is not None and version in ("v1", "v2"):
-            # v2 では mri が value 直下ではなく別の場所にある場合がある
-            mri = p_value.get("mri")
-            if mri is None:
-                # 診断: value のキーを出力して構造を確認
-                if diag_printed < 3:
-                    diag_printed += 1
-                    print(f"[DIAG] people record without mri. value keys: {list(p_value.keys())[:20]}")
-                    for k in list(p_value.keys())[:10]:
-                        v = p_value[k]
-                        v_str = str(v)[:200] if v is not None else "None"
-                        print(f"[DIAG]   {k} = {v_str}")
-                # v2 で mri が別のキーにある場合を試す
-                mri = p_value.get("objectId") or p_value.get("id") or p_value.get("userId")
-                if mri is not None:
-                    p_value["mri"] = mri
+            mri = (
+                p_value.get("mri")
+                or p_value.get("objectId")
+                or p_value.get("id")
+                or p_value.get("userId")
+            )
             if mri is not None:
-                merged = p | p_value
-                # email の取得を試みる (v2 では別のキーにある場合がある)
+                merged = p | p_value if p_value is not p else dict(p)
+                merged["mri"] = mri
+                # email の取得を試みる
                 if not merged.get("email"):
                     merged["email"] = (
                         p_value.get("email")
@@ -248,8 +254,9 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
                     merged["displayName"] = (
                         p_value.get("displayName")
                         or p_value.get("display_name")
-                        or p_value.get("givenName", "") + " " + p_value.get("surname", "")
-                    ).strip() or None
+                        or (p_value.get("givenName", "") + " " + p_value.get("surname", "")).strip()
+                        or None
+                    )
                 try:
                     parsed_people.add(Contact.from_dict(merged))
                 except (ValueError, TypeError, KeyError) as e:
