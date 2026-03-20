@@ -13,39 +13,31 @@ if not exist "%PARSER_EXE%" (
     exit /b 1
 )
 
-REM Teams IndexedDB の候補パスを順に探索
+REM EBWebView 配下のプロファイルフォルダ内の IndexedDB を探索
+REM （プロファイル名は Default / WV2Profile_tfw 等、環境により異なる）
 set TEAMS_DB=
-set "CANDIDATE1=%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\Default\IndexedDB"
-set "CANDIDATE2=%LOCALAPPDATA%\Microsoft\MSTeams\EBWebView\Default\IndexedDB"
-set "CANDIDATE3=%APPDATA%\Microsoft\Teams\IndexedDB"
+set "EBWEBVIEW=%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView"
 
-for %%C in ("%CANDIDATE1%" "%CANDIDATE2%" "%CANDIDATE3%") do (
-    if exist %%C (
-        set "TEAMS_DB=%%~C"
+if not exist "%EBWEBVIEW%" (
+    echo [ERROR] Teams の EBWebView フォルダが見つかりません:
+    echo   %EBWEBVIEW%
+    pause
+    exit /b 1
+)
+
+for /d %%P in ("%EBWEBVIEW%\*") do (
+    if exist "%%P\IndexedDB" (
+        set "TEAMS_DB=%%P\IndexedDB"
         goto :found_db
     )
 )
 
-echo [ERROR] Teams の IndexedDB フォルダが見つかりません。
-echo   以下のパスを確認しましたが、いずれも存在しません:
-echo     %CANDIDATE1%
-echo     %CANDIDATE2%
-echo     %CANDIDATE3%
-echo.
-echo   Teams がインストールされていないか、別のパスにある可能性があります。
-echo   IndexedDB フォルダのパスを手動で指定して実行してください:
-echo     run_teams_validator.bat "C:\path\to\IndexedDB"
+echo [ERROR] EBWebView 配下に IndexedDB フォルダが見つかりません
 pause
 exit /b 1
 
 :found_db
 echo   検出: %TEAMS_DB%
-
-REM コマンドライン引数でパスが指定された場合はそちらを優先
-if not "%~1"=="" (
-    set "TEAMS_DB=%~1"
-    echo   手動指定: %TEAMS_DB%
-)
 
 REM IndexedDB 内の .leveldb フォルダを探す
 set LEVELDB_PATH=
