@@ -233,28 +233,37 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
             p_value = p
 
         if p_value is not None and version in ("v1", "v2"):
+            # email の取得: v2 では emailAddresses (リスト) に格納されている
+            email = (
+                p_value.get("email")
+                or p_value.get("emailAddress")
+                or p_value.get("userPrincipalName")
+                or p_value.get("sipAddress")
+            )
+            # emailAddresses はリスト形式
+            if not email:
+                email_addresses = p_value.get("emailAddresses", [])
+                if isinstance(email_addresses, list) and email_addresses:
+                    email = email_addresses[0]
+
+            # mri の取得: v2 では mri がない場合、emailAddresses[0] を代用
             mri = (
                 p_value.get("mri")
                 or p_value.get("objectId")
                 or p_value.get("id")
                 or p_value.get("userId")
+                or email  # email を mri の代わりに使用
             )
             if mri is not None:
                 merged = p | p_value if p_value is not p else dict(p)
                 merged["mri"] = mri
-                # email の取得を試みる
                 if not merged.get("email"):
-                    merged["email"] = (
-                        p_value.get("email")
-                        or p_value.get("emailAddress")
-                        or p_value.get("userPrincipalName")
-                        or p_value.get("sipAddress")
-                    )
+                    merged["email"] = email
                 if not merged.get("displayName") and not merged.get("display_name"):
                     merged["displayName"] = (
                         p_value.get("displayName")
                         or p_value.get("display_name")
-                        or (p_value.get("givenName", "") + " " + p_value.get("surname", "")).strip()
+                        or (p_value.get("givenName", p_value.get("GivenName", "")) + " " + p_value.get("surname", p_value.get("Surname", ""))).strip()
                         or None
                     )
                 try:
