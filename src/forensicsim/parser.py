@@ -228,7 +228,9 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
                 p_value.get("email")
                 or p_value.get("emailAddress")
                 or p_value.get("userPrincipalName")
+                or p_value.get("UserPrincipalName")
                 or p_value.get("sipAddress")
+                or p_value.get("SipAddress")
             )
             if not email:
                 email_addresses = (
@@ -241,9 +243,14 @@ def _parse_people(people: list[dict], version: str) -> set[Contact]:
 
             mri = (
                 p_value.get("mri")
+                or p_value.get("MRI")
                 or p_value.get("objectId")
+                or p_value.get("ObjectId")
+                or p_value.get("ExternalDirectoryObjectId")
                 or p_value.get("id")
+                or p_value.get("Id")
                 or p_value.get("userId")
+                or p_value.get("UserId")
                 or email
             )
 
