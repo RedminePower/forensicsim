@@ -71,12 +71,20 @@ if errorlevel 1 (
 )
 
 echo.
-echo === Step 2: データ検証 ===
+echo === Step 2: 基本検証 ===
 echo.
 
 python "%~dp0teams_data_validator.py" "%OUTPUT_JSON%"
 
 echo.
+echo === Step 3: 詳細分析 ===
+echo.
+
+python "%~dp0teams_deep_analysis.py" "%OUTPUT_JSON%"
+
+echo.
 echo === 完了 ===
 echo 結果を確認してください。
+echo 出力が長い場合は以下でファイルに保存できます:
+echo   python "%~dp0teams_deep_analysis.py" "%OUTPUT_JSON%" ^> C:\tmp\analysis_result.txt
 pause
