@@ -25,9 +25,14 @@ def main():
     args = parser.parse_args()
 
     db_path = Path(args.filepath)
-    print(f"Opening: {db_path}\n")
+    # .leveldb と同階層の .blob フォルダを自動検出
+    blob_path = Path(str(db_path).replace(".leveldb", ".blob"))
+    if not blob_path.exists():
+        blob_path = None
+    print(f"Opening: {db_path}")
+    print(f"Blob path: {blob_path}\n")
 
-    raw_records = parse_db(db_path, filter_db_results=True)
+    raw_records = parse_db(db_path, blobpath=blob_path, filter_db_results=True)
 
     # people store のレコードのみ抽出
     people_records = [r for r in raw_records if r.get("store") == "people"]
