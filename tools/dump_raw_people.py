@@ -9,12 +9,13 @@ parser が出力した contact には mri=email のみで UUID がないため�
 """
 import sys
 import os
-import json
+import re
 
 # forensicsim の src を参照可能にする
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from forensicsim.backend import open_indexeddb
+from forensicsim.backend import parse_db
+from pathlib import Path
 
 
 def main():
@@ -23,82 +24,77 @@ def main():
     parser.add_argument("-f", "--filepath", required=True)
     args = parser.parse_args()
 
-    db_path = args.filepath
+    db_path = Path(args.filepath)
     print(f"Opening: {db_path}\n")
 
-    people_records = []
-    for record in open_indexeddb(db_path):
-        store_name = record.get("store", "")
-        if "people" in store_name.lower():
-            people_records.append(record)
+    raw_records = parse_db(db_path, filter_db_results=True)
 
-    print(f"=== people store レコード: {len(people_records)} 件 ===\n")
+    # people store のレコードのみ抽出
+    people_records = [r for r in raw_records if r.get("store") == "people"]
+    print(f"\n=== people store レコード: {len(people_records)} 件 ===\n")
 
     if not people_records:
         print("people レコードが見つかりません。")
-        print("利用可能な store 名を確認します...")
-        stores = set()
-        for record in open_indexeddb(db_path):
-            stores.add(record.get("store", "unknown"))
-        for s in sorted(stores):
-            print(f"  {s}")
         return
 
-    # 最初の5件の raw レコードのキーとサンプル値を出力
-    print("--- raw people レコードのキー（最初の5件）---\n")
+    # 最初の5件の value のキーとサンプル値を出力
+    print("--- raw people レコード value のキー（最初の5件）---\n")
     for i, rec in enumerate(people_records[:5]):
-        value = rec.get("value", rec)
+        value = rec.get("value", {})
         if isinstance(value, dict):
-            print(f"record {i+1}: keys = {list(value.keys())[:30]}")
+            print(f"record {i+1}: keys ({len(value.keys())}個) = {list(value.keys())[:40]}")
             # UUID 候補のフィールドを探す
             for key in ["mri", "objectId", "id", "userId", "aadObjectId",
                          "Id", "ObjectId", "UserId", "AadObjectId",
                          "email", "Email", "EmailAddresses", "emailAddresses",
-                         "displayName", "DisplayName", "userPrincipalName"]:
+                         "displayName", "DisplayName", "userPrincipalName",
+                         "UserPrincipalName", "sipAddress", "SipAddress",
+                         "GivenName", "givenName", "Surname", "surname"]:
                 val = value.get(key)
                 if val is not None:
-                    val_str = str(val)[:100]
+                    val_str = str(val)[:150]
                     print(f"  {key}: {val_str}")
             print()
 
-    # 全 people レコードのユニークキーを集計
+    # 全 people レコードの value のユニークキーを集計
     all_keys = set()
     for rec in people_records:
-        value = rec.get("value", rec)
+        value = rec.get("value", {})
         if isinstance(value, dict):
             all_keys.update(value.keys())
 
-    print(f"--- 全 people レコードのユニークキー ({len(all_keys)} 個) ---")
+    print(f"--- 全 people レコードの value ユニークキー ({len(all_keys)} 個) ---")
     for k in sorted(all_keys):
         print(f"  {k}")
     print()
 
-    # UUID っぽいフィールド（36文字でハイフン4つ）を持つキーを探す
-    print("--- UUID を含む可能性のあるフィールド ---\n")
-    import re
+    # UUID っぽい値を持つフィールドを探す
+    print("--- UUID を含むフィールド ---\n")
     uuid_pattern = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
     uuid_fields = {}
     for rec in people_records[:100]:
-        value = rec.get("value", rec)
+        value = rec.get("value", {})
         if isinstance(value, dict):
             for k, v in value.items():
+                if k in uuid_fields:
+                    continue
                 v_str = str(v)
-                if uuid_pattern.search(v_str):
-                    if k not in uuid_fields:
-                        uuid_fields[k] = v_str[:100]
+                match = uuid_pattern.search(v_str)
+                if match:
+                    uuid_fields[k] = v_str[:150]
 
     if uuid_fields:
-        for k, sample in uuid_fields.items():
+        for k, sample in sorted(uuid_fields.items()):
             print(f"  {k}: {sample}")
     else:
         print("  UUID を含むフィールドは見つかりませんでした。")
     print()
 
-    # 最初の1件の全フィールドをダンプ
+    # 最初の1件の全フィールドダンプ
     print("--- record 1 の全フィールドダンプ ---\n")
-    value = people_records[0].get("value", people_records[0])
+    value = people_records[0].get("value", {})
     if isinstance(value, dict):
-        for k, v in value.items():
+        for k, v in sorted(value.items()):
             v_str = str(v)[:200]
             print(f"  {k}: {v_str}")
 
