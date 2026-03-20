@@ -189,6 +189,96 @@ def analyze(calls: list[dict], meetings: list[dict]) -> None:
     print(f"  threadId で紐付け成功:         {len(matched_pairs)}")
     print(f"  threadId あるが meeting 不一致: {len(unmatched_calls)}")
 
+    # --- フォーマット比較: threadId vs meeting.id サンプル ---
+    if unmatched_calls or (thread_id_present > 0 and len(matched_pairs) == 0):
+        print(f"\n■ フォーマット比較: call.threadId vs meeting.id")
+
+        # call.threadId サンプル（ユニーク値、最大10件）
+        unique_tids = sorted(set(
+            c["call_log"].get("threadId", "")
+            for c in multi_party
+            if c["call_log"].get("threadId") not in (None, "None", "")
+        ))
+        print(f"\n  call.threadId サンプル（{len(unique_tids)} 種類中、最大10件）:")
+        for tid in unique_tids[:10]:
+            print(f"    {tid}")
+
+        # meeting.id サンプル（最大10件）
+        unique_mids = sorted(meeting_by_id.keys())
+        print(f"\n  meeting.id サンプル（{len(unique_mids)} 種類中、最大10件）:")
+        for mid in unique_mids[:10]:
+            print(f"    {mid}")
+
+        # 部分一致の試行
+        print(f"\n  部分一致の試行:")
+        partial_match_count = 0
+        partial_examples = []
+        for c in multi_party:
+            tid = c["call_log"].get("threadId", "")
+            if not tid or tid in (None, "None", ""):
+                continue
+            for mid in meeting_by_id:
+                if tid in mid or mid in tid:
+                    partial_match_count += 1
+                    if len(partial_examples) < 3:
+                        partial_examples.append((tid, mid))
+                    break
+        print(f"    部分一致（substring）: {partial_match_count} 件")
+        for tid, mid in partial_examples:
+            print(f"      threadId: {tid}")
+            print(f"      meeting:  {mid}")
+            print()
+
+        # UUID 抽出による一致の試行
+        import re
+        uuid_pattern = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
+
+        tid_uuids = {}  # uuid -> threadId
+        for c in multi_party:
+            tid = c["call_log"].get("threadId", "")
+            if not tid or tid in (None, "None", ""):
+                continue
+            for m in uuid_pattern.findall(tid):
+                tid_uuids[m.lower()] = tid
+
+        mid_uuids = {}  # uuid -> meeting.id
+        for mid in meeting_by_id:
+            for m in uuid_pattern.findall(mid):
+                mid_uuids[m.lower()] = mid
+
+        uuid_matches = set(tid_uuids.keys()) & set(mid_uuids.keys())
+        print(f"    UUID 抽出による一致: {len(uuid_matches)} 件")
+        print(f"    threadId 内の UUID 数: {len(tid_uuids)}")
+        print(f"    meeting.id 内の UUID 数: {len(mid_uuids)}")
+        for uuid_val in list(uuid_matches)[:3]:
+            print(f"      UUID:     {uuid_val}")
+            print(f"      threadId: {tid_uuids[uuid_val]}")
+            print(f"      meeting:  {mid_uuids[uuid_val]}")
+            print()
+
+        # Base64 デコードの試行（meeting.id の meeting_XXXX 部分）
+        import base64
+        mid_decoded = {}  # decoded -> meeting.id
+        for mid in meeting_by_id:
+            b64_match = re.search(r'meeting_([A-Za-z0-9+/=_-]+)@', mid)
+            if b64_match:
+                b64_str = b64_match.group(1)
+                # URL-safe base64 → standard base64
+                b64_str_std = b64_str.replace('-', '+').replace('_', '/')
+                # パディング補完
+                b64_str_std += '=' * (4 - len(b64_str_std) % 4) if len(b64_str_std) % 4 else ''
+                try:
+                    decoded = base64.b64decode(b64_str_std).decode('utf-8', errors='replace')
+                    mid_decoded[mid] = decoded
+                except Exception:
+                    pass
+
+        if mid_decoded:
+            print(f"    meeting.id の Base64 デコード（最大5件）:")
+            for mid, decoded in list(mid_decoded.items())[:5]:
+                print(f"      {mid[:60]}...")
+                print(f"      -> decoded: {decoded}")
+
     if matched_pairs:
         print(f"\n  紐付けペア一覧:")
         for i, (call, meeting) in enumerate(matched_pairs):
