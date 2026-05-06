@@ -181,6 +181,110 @@ class Message(DataClassJsonMixin):
             return NotImplemented
         return self.cached_deduplication_key < other.cached_deduplication_key
 
+@dataclass_json(letter_case=LetterCase.CAMEL, undefined=Undefined.EXCLUDE)
+@dataclass()
+class EventCall(DataClassJsonMixin):
+    # Message とほぼ同じ構造だが、content は strip_html_tags を適用せず生の XML をそのまま保持する。
+    # messagetype "Event/Call" 用のクラスで、会議セッションの開始/終了情報が
+    # XML 形式で content に格納されている (例: <callEventType>callStarted</callEventType>、<ended/>)。
+    # アプリ側で content の XML を解析してセッション時刻を取り出す前提。
+    attachments: list[Any] = field(default_factory=list)
+    cached_deduplication_key: Optional[str] = None
+    client_arrival_time: Optional[str] = None
+    clientmessageid: Optional[str] = None
+    composetime: Optional[str] = None
+    conversation_id: Optional[str] = None
+    content: Optional[str] = None  # 生の XML を保持 (strip_html_tags は適用しない)
+    contenttype: Optional[str] = None
+    created_time: Optional[datetime] = field(
+        default=None,
+        metadata=config(decoder=decode_timestamp, encoder=encode_timestamp),
+    )
+    creator: Optional[str] = None
+    is_from_me: Optional[bool] = None
+    message_kind: Optional[str] = None
+    messagetype: Optional[str] = None
+    original_arrival_time: Optional[str] = None
+    properties: dict[str, Any] = field(
+        default_factory=dict, metadata=config(decoder=decode_dict)
+    )
+    version: Optional[datetime] = field(
+        default=None,
+        metadata=config(decoder=decode_timestamp, encoder=encode_timestamp),
+    )
+
+    origin_file: Optional[str] = field(
+        default=None, metadata=config(field_name="origin_file")
+    )
+    record_type: str = field(
+        default="event_call", metadata=config(field_name="record_type")
+    )
+
+    def __post_init__(self) -> None:
+        if self.cached_deduplication_key is None:
+            self.cached_deduplication_key = str(self.creator) + str(
+                self.clientmessageid
+            )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, EventCall):
+            return NotImplemented
+        return self.cached_deduplication_key == other.cached_deduplication_key
+
+    def __hash__(self) -> int:
+        return hash(self.cached_deduplication_key)
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, EventCall):
+            return NotImplemented
+        return self.cached_deduplication_key < other.cached_deduplication_key
+
+
+@dataclass_json(letter_case=LetterCase.CAMEL, undefined=Undefined.EXCLUDE)
+@dataclass()
+class TopicUpdate(DataClassJsonMixin):
+    # messagetype "ThreadActivity/TopicUpdate" 用のクラス。会議名変更を記録する。
+    # content の XML (例: <topicupdate><value>新トピック名</value></topicupdate>) から
+    # 新トピック名を parser 側で抽出し `topic` フィールドに格納する。
+    # アプリ側はセッション開始時刻と originalArrivalTime を比較して「当時の会議名」を復元する前提。
+    cached_deduplication_key: Optional[str] = None
+    clientmessageid: Optional[str] = None
+    composetime: Optional[str] = None
+    conversation_id: Optional[str] = None
+    content: Optional[str] = None  # 生の XML を保持 (デバッグ用)
+    contenttype: Optional[str] = None
+    creator: Optional[str] = None
+    is_from_me: Optional[bool] = None
+    messagetype: Optional[str] = None
+    original_arrival_time: Optional[str] = None
+    topic: Optional[str] = None  # content から抽出した新トピック名
+
+    origin_file: Optional[str] = field(
+        default=None, metadata=config(field_name="origin_file")
+    )
+    record_type: str = field(
+        default="topic_update", metadata=config(field_name="record_type")
+    )
+
+    def __post_init__(self) -> None:
+        if self.cached_deduplication_key is None:
+            self.cached_deduplication_key = str(self.creator) + str(
+                self.clientmessageid
+            )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TopicUpdate):
+            return NotImplemented
+        return self.cached_deduplication_key == other.cached_deduplication_key
+
+    def __hash__(self) -> int:
+        return hash(self.cached_deduplication_key)
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, TopicUpdate):
+            return NotImplemented
+        return self.cached_deduplication_key < other.cached_deduplication_key
+
 
 @dataclass_json(letter_case=LetterCase.CAMEL, undefined=Undefined.EXCLUDE)
 @dataclass()
@@ -301,23 +405,33 @@ def _parse_buddies(buddies: list[dict], version: str) -> set[Contact]:
 
 
 def _parse_conversations(conversations: list[dict], version: str) -> set[Meeting]:
-    cleaned_conversations = set()
+    cleaned_conversations: set[Meeting] = set()
+
+    # version が unknown の場合は meeting レコードを抽出できない。
+    # 各レコードごとに warning を出すと大量のノイズになるため、件数情報付きで 1 回だけ警告する。
+    # (本当に unknown なケースは identify_teams_version 側でも詳細な warning が出ている)
+    if version not in ("v1", "v2"):
+        if conversations:
+            logging.warning(
+                f"_parse_conversations: skipped {len(conversations)} conversation record(s) "
+                f"because Teams version is unknown."
+            )
+        return cleaned_conversations
 
     for c in conversations:
         value = c.get("value", {})
         thread_properties = value.get("threadProperties", {})
-        # Conversations can contain multiple artefacts. Filter only for meetings.
-        if version in ("v1", "v2") and "meeting" in thread_properties:
-            c |= value
-            c |= {"cached_deduplication_key": c.get("id")}
-            try:
-                cleaned_conversations.add(Meeting.from_dict(c))
-            except (ValueError, TypeError, KeyError, OSError, OverflowError) as e:
-                print(f"Warning: Skipping meeting due to parsing error: {e}")
-        else:
-            logging.warning(
-                "Teams Version is unknown. Can not extract records of type meeting."
-            )
+        # Conversations ストアには meeting 以外 (通常のチャットスレッド等) も含まれる。
+        # meeting キーを持たないレコードは警告を出さず silent skip する (取りこぼしではなく仕様)。
+        if "meeting" not in thread_properties:
+            continue
+
+        c |= value
+        c |= {"cached_deduplication_key": c.get("id")}
+        try:
+            cleaned_conversations.add(Meeting.from_dict(c))
+        except (ValueError, TypeError, KeyError, OSError, OverflowError) as e:
+            print(f"Warning: Skipping meeting due to parsing error: {e}")
     return cleaned_conversations
 
 
@@ -373,9 +487,177 @@ def _parse_reply_chains(reply_chains: list[dict], version: str) -> set[Message]:
     return cleaned_reply_chains
 
 
+def _parse_event_calls(reply_chains: list[dict], version: str) -> set[EventCall]:
+    # reply_chains から messagetype "Event/Call" のレコードを抽出する。
+    # 会議の各セッションは callStarted と ended のペアで記録される。
+    # content の XML はそのまま保持し、セッション時刻はアプリ側で解析する。
+    cleaned_event_calls: set[EventCall] = set()
+
+    if version not in ("v1", "v2"):
+        # version が unknown の場合は _parse_reply_chains 側ですでに警告が出ているのでここでは黙る
+        return cleaned_event_calls
+
+    for rc in reply_chains:
+        rc_value = rc.get("value", {})
+        if not rc_value:
+            continue
+
+        message_dict: dict = {}
+        if version == "v1":
+            message_dict = rc_value.get("messages", {}) or {}
+        else:  # v2
+            message_dict = rc_value.get("messageMap", {}) or {}
+
+        if not message_dict:
+            continue
+
+        for k, md in message_dict.items():
+            if not isinstance(md, dict):
+                continue
+
+            # 防御的: messagetype は v1/v2 でキー名が違うので両方を取得して片方が取れた値を採用
+            mtype = md.get("messagetype") or md.get("messageType") or ""
+            if mtype != "Event/Call":
+                continue
+
+            # 必須: content (XML 本体) が無いレコードはスキップ
+            if not md.get("content"):
+                logging.warning(
+                    f"event_call has empty content: id={md.get('id')}"
+                )
+                continue
+
+            # _parse_reply_chains と同じパターンで rc / rc_value / md をマージ
+            merged = dict(rc)
+            merged.update(rc_value)
+            merged.update(md)
+
+            if version == "v1":
+                merged["original_arrival_time"] = md.get("originalarrivaltime")
+            else:  # v2
+                merged["cached_deduplication_key"] = md.get("dedupeKey")
+                merged["clientmessageid"] = md.get("clientMessageId")
+                merged["composetime"] = md.get("clientArrivalTime")
+                merged["contenttype"] = md.get("contentType")
+                merged["created_time"] = md.get("clientArrivalTime")
+                merged["is_from_me"] = md.get("isSentByCurrentUser")
+                merged["messagetype"] = md.get("messageType")
+
+            try:
+                cleaned_event_calls.add(EventCall.from_dict(merged))
+            except (ValueError, TypeError, KeyError, OSError, OverflowError) as e:
+                logging.warning(
+                    f"Skipping event_call due to parsing error: id={md.get('id')}, err={e}"
+                )
+                continue
+
+    return cleaned_event_calls
+
+
+def _extract_topic_from_content(content: str) -> Optional[str]:
+    # ThreadActivity/TopicUpdate の content XML から <value>...</value> の中身を抽出する。
+    # 期待形式: <topicupdate><eventtime>...</eventtime><initiator>...</initiator><value>新トピック名</value></topicupdate>
+    # 形式が崩れている / <value> が存在しない場合は None を返す (呼び出し側で warning + スキップ)。
+    if not content:
+        return None
+    try:
+        soup = BeautifulSoup(content, features="html.parser")
+        value_tag = soup.find("value")
+        if value_tag is None:
+            return None
+        text = value_tag.get_text()
+        return text if text else None
+    except Exception as e:
+        logging.warning(f"_extract_topic_from_content: parse error: {e}")
+        return None
+
+
+def _parse_topic_updates(reply_chains: list[dict], version: str) -> set[TopicUpdate]:
+    # reply_chains から messagetype "ThreadActivity/TopicUpdate" のレコードを抽出する。
+    # 会議名変更を時系列で追跡するためのレコードで、各セッションを「そのセッション開始時点で
+    # 有効だった会議名」で表示するために使う。
+    cleaned_topic_updates: set[TopicUpdate] = set()
+
+    if version not in ("v1", "v2"):
+        # version が unknown の場合は _parse_reply_chains 側ですでに警告が出ているのでここでは黙る
+        return cleaned_topic_updates
+
+    for rc in reply_chains:
+        rc_value = rc.get("value", {})
+        if not rc_value:
+            continue
+
+        message_dict: dict = {}
+        if version == "v1":
+            message_dict = rc_value.get("messages", {}) or {}
+        else:  # v2
+            message_dict = rc_value.get("messageMap", {}) or {}
+
+        if not message_dict:
+            continue
+
+        for k, md in message_dict.items():
+            if not isinstance(md, dict):
+                continue
+
+            # 防御的: messagetype は v1/v2 でキー名が違うので両方を取得して片方が取れた値を採用
+            mtype = md.get("messagetype") or md.get("messageType") or ""
+            if mtype != "ThreadActivity/TopicUpdate":
+                continue
+
+            # 必須: content (XML 本体) が無いレコードはスキップ
+            content = md.get("content")
+            if not content:
+                logging.warning(
+                    f"topic_update has empty content: id={md.get('id')}"
+                )
+                continue
+
+            # XML から新トピック名を抽出 (失敗時は warning + 該当レコードのみスキップ)
+            topic = _extract_topic_from_content(content)
+            if not topic:
+                logging.warning(
+                    f"topic_update could not extract topic from content: "
+                    f"id={md.get('id')}, content_head={content[:120]!r}"
+                )
+                continue
+
+            # _parse_event_calls と同じパターンで rc / rc_value / md をマージ
+            merged = dict(rc)
+            merged.update(rc_value)
+            merged.update(md)
+            merged["topic"] = topic  # 抽出した新トピック名を格納
+
+            if version == "v1":
+                merged["original_arrival_time"] = md.get("originalarrivaltime")
+            else:  # v2
+                merged["cached_deduplication_key"] = md.get("dedupeKey")
+                merged["clientmessageid"] = md.get("clientMessageId")
+                merged["composetime"] = md.get("clientArrivalTime")
+                merged["contenttype"] = md.get("contentType")
+                merged["created_time"] = md.get("clientArrivalTime")
+                merged["is_from_me"] = md.get("isSentByCurrentUser")
+                merged["messagetype"] = md.get("messageType")
+
+            try:
+                cleaned_topic_updates.add(TopicUpdate.from_dict(merged))
+            except (ValueError, TypeError, KeyError, OSError, OverflowError) as e:
+                logging.warning(
+                    f"Skipping topic_update due to parsing error: id={md.get('id')}, err={e}"
+                )
+                continue
+
+    return cleaned_topic_updates
+
+
 def identify_teams_version(reply_chains: list[dict]) -> str:
-    # Identify version based on reply chain structure
-    # Check multiple records since some may be empty
+    # reply_chain の構造からバージョン (v1 / v2) を判定する。
+    # 空レコードが混じるので先頭 50 件を順に調べる。
+    # 既知のキー (messages / messageMap) がどれも見つからず、それでも非空の value 辞書が
+    # 存在した場合は、そこにあるキー一覧を warning で記録する。
+    # これにより将来 Teams が新フォーマット (例: 仮称 v3) を導入した際に、
+    # 新しいキー名がログに残り、対応すべき内容をすぐに把握できるようにする。
+    unknown_samples: list[list[str]] = []
     for i, rc in enumerate(reply_chains[:50]):
         rc_value = rc.get("value", {})
         if not rc_value or not isinstance(rc_value, dict):
@@ -385,6 +667,17 @@ def identify_teams_version(reply_chains: list[dict]) -> str:
         if rc_value.get("messageMap", {}):
             return "v2"
 
+        # value 辞書は非空だが、既知のどのキーも持たない。
+        # 将来の新フォーマットの可能性があるので、診断用にサンプルとしてキー一覧を残す。
+        if len(unknown_samples) < 3:
+            unknown_samples.append(sorted(rc_value.keys()))
+
+    # 先頭 50 件で既知の構造が見つからなかった。
+    if unknown_samples:
+        logging.warning(
+            "identify_teams_version: unknown structure. "
+            f"sample value keys (up to 3 records): {unknown_samples}"
+        )
     return "unknown"
 
 
@@ -405,12 +698,14 @@ def parse_records(records: list[dict]) -> list[dict]:
     # identify version
     version = identify_teams_version(reply_chains)
 
-    # sort within groups i.e., Contacts, Meetings, Conversations
+    # 種類ごとにソート (Contacts / Meetings / Conversations / Event/Call / TopicUpdate) してから連結
     parsed_records = (
         sorted(_parse_people(people, version))
         + sorted(_parse_buddies(buddies, version))
         + sorted(_parse_reply_chains(reply_chains, version))
         + sorted(_parse_conversations(conversations, version))
+        + sorted(_parse_event_calls(reply_chains, version))
+        + sorted(_parse_topic_updates(reply_chains, version))
     )
     return [r.to_dict() for r in parsed_records]
 
