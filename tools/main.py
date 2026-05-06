@@ -33,6 +33,7 @@ from forensicsim.parser import process_db
 
 
 @click.command()
+@click.version_option(version=__version__, prog_name="ms_teams_parser")
 @click.option(
     "-f",
     "--filepath",
