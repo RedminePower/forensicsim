@@ -34,3 +34,16 @@ coll = COLLECT(exe,
                upx=False,
                upx_exclude=[],
                name='ms_teams_parser')
+
+# Pack the onedir output into a single distributable zip so the parent
+# project can vendor one tracked artifact instead of the loose folder.
+# shutil.make_archive uses ZIP_DEFLATED, matching the previously hand-built zip.
+import os
+import shutil
+
+bundle_name = 'ms_teams_parser'
+zip_path = os.path.join(DISTPATH, bundle_name + '.zip')
+if os.path.exists(zip_path):
+    os.remove(zip_path)
+shutil.make_archive(os.path.join(DISTPATH, bundle_name), 'zip',
+                    root_dir=DISTPATH, base_dir=bundle_name)
